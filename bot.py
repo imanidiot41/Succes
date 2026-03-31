@@ -158,17 +158,6 @@ def is_me(ctx):
 
 # ===== BOT EVENTS =====
 @bot.event
-async def on_ready():
-    print(f'✅ Bot online! Logged in as {bot.user}')
-    print(f'📅 PH Time: {datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}')
-    await bot.add_cog(GitHubCommands(bot))
-
-    # Register slash commands
-    bot.tree.add_command(clear)
-    await bot.tree.sync()
-    reset_at_midnight.start()
-
-@bot.event
 async def on_message(message):
     if message.channel.id == SUCCESS_CHANNEL_ID and "✅ Trade completed" in message.content:
         data = load_data()
@@ -234,24 +223,45 @@ async def clear(interaction: discord.Interaction, amount: int = 50):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.followup.send(f"🧹 Cleared {len(deleted)} messages.", ephemeral=True)
 
-# ===== DAILY RESET =====
-@tasks.loop(hours=24)
+# ===== DAILY RESET (updated with once-per-day safeguard) =====
+last_reset_date = None  # tracks the last day the reset ran
+
+@tasks.loop(seconds=60)  # check every minute
 async def reset_at_midnight():
+    global last_reset_date
     now = datetime.now(PH_TIMEZONE)
-    if now.hour == 0 and now.minute == 0:
-        data = load_data()
-        today = get_today()
-        if today not in data:
-            data[today] = 0
-            save_data(data)
-            print(f"🔄 Daily reset at {today}")
-        channel = bot.get_channel(SUCCESS_CHANNEL_ID)
-        if channel:
-            await channel.send("🔄 **Day reset!** New successes will count for today. Use `/calculate` to track.")
+    today = get_today()
+
+    if now.hour == 0 and now.minute == 0:  # exactly 12:00 AM PH time
+        if last_reset_date != today:  # ensure only once per day
+            data = load_data()
+            if today not in data:
+                data[today] = 0
+                save_data(data)
+                print(f"🔄 Daily reset at {today}")
+
+            channel = bot.get_channel(SUCCESS_CHANNEL_ID)
+            if channel:
+                await channel.send("🔄 **Day reset!** New successes will count for today. Use `/calculate` to track.")
+
+            last_reset_date = today  # update the last reset date
 
 @reset_at_midnight.before_loop
 async def before_reset():
     await bot.wait_until_ready()
+
+# ===== BOT ON_READY =====
+@bot.event
+async def on_ready():
+    print(f'✅ Bot online! Logged in as {bot.user}')
+    print(f'📅 PH Time: {datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}')
+    await bot.add_cog(GitHubCommands(bot))
+
+    # Register slash commands
+    bot.tree.add_command(clear)
+    await bot.tree.sync()
+    
+    reset_at_midnight.start()  # <-- starts the daily reset task
 
 # ===== RUN BOT =====
 bot.run(os.getenv('DISCORD_TOKEN'))
