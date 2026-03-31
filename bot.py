@@ -3,11 +3,12 @@ from discord.ext import commands, tasks
 import json
 import os
 from datetime import datetime, timezone, timedelta
+import asyncio
 
 # ===== YOUR CONFIGURATION =====
 YOUR_USER_ID = 1380109644558503977           # Only you can use commands
 SUCCESS_CHANNEL_ID = 1488400266075045898     # Channel where stealer sends success messages
-PH_TIMEZONE = timezone(timedelta(hours=8))   # Philippines time (UTC+8)
+PH_TIMEZONE = timezone(timedelta(hours=8))   # Philippines time
 DATA_FILE = 'successes.json'
 
 # ===== BOT SETUP =====
@@ -29,7 +30,6 @@ def save_data(data):
 def get_today():
     return datetime.now(PH_TIMEZONE).strftime('%Y-%m-%d')
 
-# Only allow you to use commands
 def is_me(ctx):
     return ctx.author.id == YOUR_USER_ID
 
@@ -43,22 +43,27 @@ async def on_ready():
 async def on_message(message):
     # Listen in the success channel for trade completion messages
     if message.channel.id == SUCCESS_CHANNEL_ID:
-        # You can customize the trigger phrase
-        if "✅ Trade completed" in message.content or "Successfully stole" in message.content:
+        if message.content.startswith("✅ Trade completed"):
             data = load_data()
             today = get_today()
-            if today not in data:
-                data[today] = 0
-            data[today] += 1
+            data[today] = data.get(today, 0) + 1
             save_data(data)
             await message.add_reaction("💰")
             print(f"📊 +1 success ({data[today]} total today)")
     await bot.process_commands(message)
 
+# ----- Auto-delete user's command message after responding -----
+@bot.after_invoke
+async def delete_command_message(ctx):
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+
+# ===== COMMANDS =====
 @bot.command()
 @commands.check(is_me)
 async def calculate(ctx):
-    """Today's successes and earnings (₱2 each)"""
     data = load_data()
     today = get_today()
     successes = data.get(today, 0)
@@ -72,7 +77,6 @@ async def calculate(ctx):
 @bot.command()
 @commands.check(is_me)
 async def total(ctx):
-    """All-time successes and earnings"""
     data = load_data()
     total_successes = sum(data.values())
     total_earnings = total_successes * 2
@@ -84,7 +88,6 @@ async def total(ctx):
 @bot.command()
 @commands.check(is_me)
 async def history(ctx, days: int = 7):
-    """Last X days (default 7)"""
     data = load_data()
     today_date = datetime.now(PH_TIMEZONE).date()
     lines = []
@@ -95,20 +98,23 @@ async def history(ctx, days: int = 7):
     embed = discord.Embed(title=f"📈 Last {days} Days", description="\n".join(lines), color=discord.Color.blue())
     await ctx.send(embed=embed)
 
-@tasks.loop(hours=24)
+# ===== FIXED MIDNIGHT RESET TASK =====
+@tasks.loop(minutes=1)
 async def reset_at_midnight():
     now = datetime.now(PH_TIMEZONE)
+
     if now.hour == 0 and now.minute == 0:
         data = load_data()
         today = get_today()
+
         if today not in data:
             data[today] = 0
             save_data(data)
             print(f"🔄 Daily reset at {today}")
-        # Optional: send a message in the channel to confirm reset
+
         channel = bot.get_channel(SUCCESS_CHANNEL_ID)
         if channel:
-            await channel.send("🔄 **New day!** Use `/calculate` to see today's successes.")
+            await channel.send("🔄 **Day reset!** New successes will count for today. Use `/calculate` to track.")
 
 @reset_at_midnight.before_loop
 async def before_reset():
