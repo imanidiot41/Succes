@@ -21,7 +21,6 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 
 # ---- GitHub API helper functions ----
 async def github_request(endpoint, method='GET', data=None):
-    """Make an authenticated request to GitHub API"""
     token = os.getenv('GITHUB_TOKEN')
     if not token:
         return None, "GITHUB_TOKEN not set. Add it to Railway variables."
@@ -38,78 +37,61 @@ async def github_request(endpoint, method='GET', data=None):
                 error_text = await resp.text()
                 return None, f'GitHub error {resp.status}: {error_text}'
 
-# ---- Autocomplete functions for repositories and files ----
-async def get_user_repos(ctx: discord.Interaction, current: str):
-    """Return list of repositories the user has access to"""
-    token = os.getenv('GITHUB_TOKEN')
-    if not token:
-        return []
-    headers = {'Authorization': f'token {token}'}
-    async with aiohttp.ClientSession() as session:
-        async with session.get('https://api.github.com/user/repos', headers=headers, params={'per_page': 50, 'sort': 'full_name'}) as resp:
-            if resp.status == 200:
-                repos = await resp.json()
-                # Filter by current input
-                matches = [r['full_name'] for r in repos if current.lower() in r['full_name'].lower()]
-                return matches[:25]
-            return []
-
-async def get_repo_files(ctx: discord.Interaction, current: str, repo_fullname: str):
-    """Return list of file paths in a repository (simple, non-recursive)"""
-    token = os.getenv('GITHUB_TOKEN')
-    if not token or not repo_fullname:
-        return []
-    headers = {'Authorization': f'token {token}'}
-    # Get contents of root directory (you can extend to recursive later)
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f'https://api.github.com/repos/{repo_fullname}/contents', headers=headers) as resp:
-            if resp.status == 200:
-                contents = await resp.json()
-                files = [item['path'] for item in contents if item['type'] == 'file']
-                # Filter by current input
-                matches = [f for f in files if current.lower() in f.lower()]
-                return matches[:25]
-            return []
-
-# ---- Command group for GitHub ----
+# ===== GITHUB COG WITH 3 PREDEFINED REPOS =====
 class GitHubCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        # Predefined repos
+        self.predefined_repos = [
+            "imanidiot41/proyx",
+            "imanidiot41/TestMm2",
+            "imanidiot41/Succes"
+        ]
 
-    # ---------- /git create ----------
-    @app_commands.command(name='git-create', description='Create a new file in a GitHub repository')
-    @app_commands.autocomplete(repository=get_user_repos)
-    async def git_create(self, interaction: discord.Interaction, repository: str, path: str, content: str, commit_message: str = None):
+    # --- Autocomplete for repositories ---
+    async def repo_autocomplete(self, interaction: discord.Interaction, current: str):
+        return [r for r in self.predefined_repos if current.lower() in r.lower()]
+
+    # --- Autocomplete for files in a repo ---
+    async def file_autocomplete(self, interaction: discord.Interaction, current: str, repo: str):
+        if not repo:
+            return []
+        token = os.getenv("GITHUB_TOKEN")
+        if not token:
+            return []
+        headers = {'Authorization': f'token {token}'}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'https://api.github.com/repos/{repo}/contents', headers=headers) as resp:
+                if resp.status == 200:
+                    contents = await resp.json()
+                    files = [item['path'] for item in contents if item['type'] == 'file']
+                    return [f for f in files if current.lower() in f.lower()][:25]
+        return []
+
+    # --- CREATE FILE ---
+    @app_commands.command(name='git-create', description='Create a new file in a chosen GitHub repo')
+    @app_commands.autocomplete(repository=repo_autocomplete)
+    async def git_create(self, interaction: discord.Interaction, repository: str, name: str, code: str, commit_message: str = None):
         await interaction.response.defer(ephemeral=True)
-        if interaction.user.id != YOUR_USER_ID:
-            await interaction.followup.send("❌ You don't have permission.", ephemeral=True)
-            return
-
         if not commit_message:
-            commit_message = f'Create {path} via bot'
-
-        # Prepare payload for GitHub API
+            commit_message = f'Create {name} via bot'
         payload = {
-            'message': commit_message,
-            'content': base64.b64encode(content.encode()).decode(),
+            "message": commit_message,
+            "content": base64.b64encode(code.encode()).decode()
         }
-        result, error = await github_request(f'repos/{repository}/contents/{path}', 'PUT', payload)
+        result, error = await github_request(f'repos/{repository}/contents/{name}', 'PUT', payload)
         if error:
-            await interaction.followup.send(f'❌ Failed to create file: {error}', ephemeral=True)
+            await interaction.followup.send(f'❌ Failed: {error}', ephemeral=True)
         else:
-            await interaction.followup.send(f'✅ File `{path}` created in `{repository}`!', ephemeral=True)
+            await interaction.followup.send(f'✅ `{name}` created in `{repository}`!', ephemeral=True)
 
-    # ---------- /git edit ----------
-    @app_commands.command(name='git-edit', description='Edit an existing file in a GitHub repository')
-    @app_commands.autocomplete(repository=get_user_repos)
-    async def git_edit(self, interaction: discord.Interaction, repository: str, path: str, content: str, commit_message: str = None):
+    # --- EDIT FILE ---
+    @app_commands.command(name='git-edit', description='Edit an existing file in a chosen GitHub repo')
+    @app_commands.autocomplete(repository=repo_autocomplete)
+    async def git_edit(self, interaction: discord.Interaction, repository: str, file: str, code: str, commit_message: str = None):
         await interaction.response.defer(ephemeral=True)
-        if interaction.user.id != YOUR_USER_ID:
-            await interaction.followup.send("❌ You don't have permission.", ephemeral=True)
-            return
 
-        # First get the current file's SHA (required for update)
-        file_info, error = await github_request(f'repos/{repository}/contents/{path}')
+        file_info, error = await github_request(f'repos/{repository}/contents/{file}')
         if error:
             await interaction.followup.send(f'❌ Could not fetch file: {error}', ephemeral=True)
             return
@@ -119,30 +101,26 @@ class GitHubCommands(commands.Cog):
             return
 
         if not commit_message:
-            commit_message = f'Update {path} via bot'
+            commit_message = f'Update {file} via bot'
 
         payload = {
-            'message': commit_message,
-            'content': base64.b64encode(content.encode()).decode(),
-            'sha': sha
+            "message": commit_message,
+            "content": base64.b64encode(code.encode()).decode(),
+            "sha": sha
         }
-        result, error = await github_request(f'repos/{repository}/contents/{path}', 'PUT', payload)
+        result, error = await github_request(f'repos/{repository}/contents/{file}', 'PUT', payload)
         if error:
-            await interaction.followup.send(f'❌ Failed to update file: {error}', ephemeral=True)
+            await interaction.followup.send(f'❌ Failed to update: {error}', ephemeral=True)
         else:
-            await interaction.followup.send(f'✅ File `{path}` updated in `{repository}`!', ephemeral=True)
+            await interaction.followup.send(f'✅ `{file}` updated in `{repository}`!', ephemeral=True)
 
-    # ---------- /git delete ----------
-    @app_commands.command(name='git-delete', description='Delete a file from a GitHub repository')
-    @app_commands.autocomplete(repository=get_user_repos)
-    async def git_delete(self, interaction: discord.Interaction, repository: str, path: str, commit_message: str = None):
+    # --- DELETE FILE ---
+    @app_commands.command(name='git-delete', description='Delete a file from a chosen GitHub repo')
+    @app_commands.autocomplete(repository=repo_autocomplete)
+    async def git_delete(self, interaction: discord.Interaction, repository: str, file: str, commit_message: str = None):
         await interaction.response.defer(ephemeral=True)
-        if interaction.user.id != YOUR_USER_ID:
-            await interaction.followup.send("❌ You don't have permission.", ephemeral=True)
-            return
 
-        # Get SHA of the file to delete
-        file_info, error = await github_request(f'repos/{repository}/contents/{path}')
+        file_info, error = await github_request(f'repos/{repository}/contents/{file}')
         if error:
             await interaction.followup.send(f'❌ Could not fetch file: {error}', ephemeral=True)
             return
@@ -152,26 +130,16 @@ class GitHubCommands(commands.Cog):
             return
 
         if not commit_message:
-            commit_message = f'Delete {path} via bot'
+            commit_message = f'Delete {file} via bot'
 
-        payload = {
-            'message': commit_message,
-            'sha': sha
-        }
-        result, error = await github_request(f'repos/{repository}/contents/{path}', 'DELETE', payload)
+        payload = {"message": commit_message, "sha": sha}
+        result, error = await github_request(f'repos/{repository}/contents/{file}', 'DELETE', payload)
         if error:
-            await interaction.followup.send(f'❌ Failed to delete file: {error}', ephemeral=True)
+            await interaction.followup.send(f'❌ Failed to delete: {error}', ephemeral=True)
         else:
-            await interaction.followup.send(f'✅ File `{path}` deleted from `{repository}`!', ephemeral=True)
+            await interaction.followup.send(f'✅ `{file}` deleted from `{repository}`!', ephemeral=True)
 
-# ===== REST OF YOUR EXISTING BOT CODE (unchanged) =====
-# [All the counting, /calculate, /total, /history, midnight reset stays exactly as before]
-
-# --- Add the cog ---
-async def setup():
-    await bot.add_cog(GitHubCommands(bot))
-
-# --- Load data functions (same as before) ---
+# ===== DATA MANAGEMENT =====
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
@@ -188,12 +156,13 @@ def get_today():
 def is_me(ctx):
     return ctx.author.id == YOUR_USER_ID
 
+# ===== BOT EVENTS =====
 @bot.event
 async def on_ready():
     print(f'✅ Bot online! Logged in as {bot.user}')
     print(f'📅 PH Time: {datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}')
-    await setup()  # Load GitHub commands
-    await bot.tree.sync()  # Sync slash commands
+    await bot.add_cog(GitHubCommands(bot))
+    await bot.tree.sync()
     reset_at_midnight.start()
 
 @bot.event
@@ -214,6 +183,7 @@ async def delete_command_message(ctx):
     except:
         pass
 
+# ===== BOT COMMANDS =====
 @bot.command()
 @commands.check(is_me)
 async def calculate(ctx):
@@ -251,6 +221,7 @@ async def history(ctx, days: int = 7):
     embed = discord.Embed(title=f"📈 Last {days} Days", description="\n".join(lines), color=discord.Color.blue())
     await ctx.send(embed=embed)
 
+# ===== DAILY RESET =====
 @tasks.loop(hours=24)
 async def reset_at_midnight():
     now = datetime.now(PH_TIMEZONE)
@@ -269,5 +240,5 @@ async def reset_at_midnight():
 async def before_reset():
     await bot.wait_until_ready()
 
-# ===== RUN =====
+# ===== RUN BOT =====
 bot.run(os.getenv('DISCORD_TOKEN'))
