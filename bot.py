@@ -162,6 +162,9 @@ async def on_ready():
     print(f'✅ Bot online! Logged in as {bot.user}')
     print(f'📅 PH Time: {datetime.now(PH_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")}')
     await bot.add_cog(GitHubCommands(bot))
+
+    # Register slash commands
+    bot.tree.add_command(clear)
     await bot.tree.sync()
     reset_at_midnight.start()
 
@@ -220,6 +223,16 @@ async def history(ctx, days: int = 7):
         lines.append(f"{date}: **{count}** successes (₱{count*2})")
     embed = discord.Embed(title=f"📈 Last {days} Days", description="\n".join(lines), color=discord.Color.blue())
     await ctx.send(embed=embed)
+
+# ===== CLEAR COMMAND =====
+@app_commands.command(name='clear', description='Clear messages in this channel')
+async def clear(interaction: discord.Interaction, amount: int = 50):
+    if interaction.user.id != YOUR_USER_ID:
+        await interaction.response.send_message("❌ You cannot use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount)
+    await interaction.followup.send(f"🧹 Cleared {len(deleted)} messages.", ephemeral=True)
 
 # ===== DAILY RESET =====
 @tasks.loop(hours=24)
